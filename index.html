@@ -37,10 +37,20 @@
   .toolbar .full { grid-column: 1 / -1; }
   .toolbar label { font-weight: 500; color: #666; font-size: .75rem; }
   table { width: 100%; border-collapse: collapse; }
-  th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; font-size: .95rem; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #eee; font-size: .95rem; }
   th { font-size: .8rem; color: #666; text-transform: uppercase; }
   td.km, th.km { text-align: right; }
   td:last-child { width: 44px; padding: 0; }
+  .settings { margin-top: 12px; font-size: .9rem; color: #555; }
+  .settings summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; gap: 6px; list-style: none; }
+  .settings summary::-webkit-details-marker { display: none; }
+  .settings .row { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: end; padding-top: 4px; }
+  .settings .hint { font-size: .75rem; color: #888; margin: 6px 0 0; }
+  .stat .sub { font-size: .95rem; font-weight: 600; color: #333; }
+  .stat.month .sub { font-size: 1.1rem; }
+  td.amt, th.amt { text-align: right; white-space: nowrap; }
+  td.date { white-space: nowrap; }
+  td.job { word-break: break-word; }
   .empty { color: #888; text-align: center; padding: 20px; }
 </style>
 </head>
@@ -54,11 +64,19 @@
       <label>Job number <input type="text" id="job" autocapitalize="characters" autocomplete="off" required></label>
       <button type="submit">Add trip</button>
     </form>
+    <details class="settings" id="settings">
+      <summary>⚙ Rate: <strong id="rateSummary">AED 1.00 / KM</strong></summary>
+      <div class="row">
+        <label>Rate (AED per KM) <input type="number" id="rate" step="0.01" min="0" inputmode="decimal"></label>
+        <button type="button" class="secondary" id="saveRate">Save</button>
+      </div>
+      <p class="hint">New trips use this rate. Trips already logged keep the rate they were added with.</p>
+    </details>
   </div>
 
   <div class="card stats">
-    <div class="stat month"><div class="v" id="monthKm">0.0</div><div class="l" id="monthLabel">KM this month</div></div>
-    <div class="stat"><div class="v" id="totalKm">0.0</div><div class="l">Total KM (shown)</div></div>
+    <div class="stat month"><div class="v"><span id="monthKm">0.0</span> km</div><div class="sub" id="monthAed">AED 0.00</div><div class="l" id="monthLabel">This month</div></div>
+    <div class="stat"><div class="v" id="totalKm">0.0</div><div class="sub" id="totalAed">AED 0.00</div><div class="l">Total (shown)</div></div>
     <div class="stat"><div class="v" id="tripCount">0</div><div class="l">Trips (shown)</div></div>
     <div class="stat"><div class="v" id="jobCount">0</div><div class="l">Jobs (shown)</div></div>
   </div>
@@ -71,7 +89,7 @@
       <button class="secondary full" id="exportBtn">Export CSV</button>
     </div>
     <table>
-      <thead><tr><th>Date</th><th>Job</th><th class="km">KM</th><th></th></tr></thead>
+      <thead><tr><th>Date</th><th>Job</th><th class="km">KM</th><th class="amt">Amount</th><th></th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
   </div>
@@ -87,6 +105,25 @@
   const localDate = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   $('date').value = localDate();
 
+  // Reimbursement rate (AED per KM). Each trip stores the rate it was logged with.
+  const RATE_KEY = 'mileageRate', DEFAULT_RATE = 1;
+  const loadRate = () => { const r = parseFloat(localStorage.getItem(RATE_KEY)); return isFinite(r) && r >= 0 ? r : DEFAULT_RATE; };
+  let rate = loadRate();
+  const tripRate = e => (typeof e.rate === 'number' && isFinite(e.rate)) ? e.rate : rate;
+  const cents = e => Math.round(e.km * tripRate(e) * 100);          // per-trip amount in fils, rounded once
+  const aed = c => `AED ${(c / 100).toFixed(2)}`;
+  const sumCents = list => list.reduce((s, e) => s + cents(e), 0);
+  function showRate() { $('rate').value = rate.toFixed(2); $('rateSummary').textContent = `AED ${rate.toFixed(2)} / KM`; }
+  showRate();
+  $('saveRate').onclick = () => {
+    const r = parseFloat($('rate').value);
+    if (!isFinite(r) || r < 0) { showRate(); return; }
+    rate = Math.round(r * 10000) / 10000;
+    localStorage.setItem(RATE_KEY, String(rate));
+    showRate(); $('settings').open = false; render();
+  };
+  $('rate').onkeydown = ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('saveRate').click(); } };
+
   function filtered() {
     const j = $('filterJob').value.trim().toLowerCase();
     const from = $('filterFrom').value, to = $('filterTo').value;
@@ -99,10 +136,10 @@
   function render() {
     const list = filtered();
     const body = $('rows');
-    body.innerHTML = list.length ? '' : `<tr><td colspan="4" class="empty">${entries.length ? 'No trips match the filter.' : 'No trips yet.'}</td></tr>`;
+    body.innerHTML = list.length ? '' : `<tr><td colspan="5" class="empty">${entries.length ? 'No trips match the filter.' : 'No trips yet.'}</td></tr>`;
     list.forEach(e => {
       const tr = document.createElement('tr');
-      tr.innerHTML = `<td></td><td></td><td class="km">${e.km.toFixed(1)}</td><td><button class="danger" title="Delete" aria-label="Delete trip">✕</button></td>`;
+      tr.innerHTML = `<td class="date"></td><td class="job"></td><td class="km">${e.km.toFixed(1)}</td><td class="amt">${aed(cents(e))}</td><td><button class="danger" title="Delete" aria-label="Delete trip">✕</button></td>`;
       tr.children[0].textContent = e.date;
       tr.children[1].textContent = e.job;
       tr.querySelector('button').onclick = () => {
@@ -111,18 +148,21 @@
       body.appendChild(tr);
     });
     $('totalKm').textContent = list.reduce((s, e) => s + e.km, 0).toFixed(1);
+    $('totalAed').textContent = aed(sumCents(list));
     $('tripCount').textContent = list.length;
     $('jobCount').textContent = new Set(list.map(e => e.job)).size;
     const now = new Date(), month = localDate(now).slice(0, 7);
-    $('monthKm').textContent = entries.filter(e => e.date.slice(0, 7) === month).reduce((s, e) => s + e.km, 0).toFixed(1);
-    $('monthLabel').textContent = `KM this month (${now.toLocaleString(undefined, { month: 'long', year: 'numeric' })})`;
+    const monthList = entries.filter(e => e.date.slice(0, 7) === month);
+    $('monthKm').textContent = monthList.reduce((s, e) => s + e.km, 0).toFixed(1);
+    $('monthAed').textContent = aed(sumCents(monthList));
+    $('monthLabel').textContent = `This month (${now.toLocaleString(undefined, { month: 'long', year: 'numeric' })})`;
   }
 
   $('entryForm').onsubmit = ev => {
     ev.preventDefault();
     const km = parseFloat($('km').value);
     if (!isFinite(km) || km < 0) return;
-    entries.push({ id: Date.now(), date: $('date').value, km, job: $('job').value.trim() });
+    entries.push({ id: Date.now(), date: $('date').value, km, job: $('job').value.trim(), rate });
     save(entries);
     $('km').value = ''; $('job').value = '';
     render();
@@ -132,7 +172,12 @@
 
   $('exportBtn').onclick = () => {
     const q = s => `"${String(s).replace(/"/g, '""')}"`;
-    const csv = ['Date,Job Number,KM'].concat(filtered().map(e => [e.date, q(e.job), e.km].join(','))).join('\n');
+    const list = filtered();
+    const totalKm = Math.round(list.reduce((s, e) => s + e.km, 0) * 10) / 10;
+    const csv = ['Date,Job Number,KM,Rate (AED/KM),Amount (AED)']
+      .concat(list.map(e => [e.date, q(e.job), e.km, tripRate(e).toFixed(2), (cents(e) / 100).toFixed(2)].join(',')))
+      .concat([['Total', '', totalKm, '', (sumCents(list) / 100).toFixed(2)].join(',')])
+      .join('\r\n');
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     a.download = `mileage-${localDate()}.csv`;
@@ -145,7 +190,9 @@
   render();
 
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(reg => document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); }))
+      .catch(() => {}));
   }
 </script>
 </body>
